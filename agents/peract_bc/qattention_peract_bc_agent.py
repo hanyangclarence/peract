@@ -23,6 +23,22 @@ from ...helpers.optim.lamb import Lamb
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+import pdb
+import sys
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
+
 NAME = 'QAttentionAgent'
 
 
@@ -137,6 +153,7 @@ class QAttentionPerActBCAgent(Agent):
                  transform_augmentation_rot_resolution: int = 5,
                  optimizer_type: str = 'adam',
                  num_devices: int = 1,
+                 real: bool = False,
                  ):
         self._layer = layer
         self._coordinate_bounds = coordinate_bounds
@@ -167,11 +184,17 @@ class QAttentionPerActBCAgent(Agent):
         self._num_devices = num_devices
         self._num_rotation_classes = num_rotation_classes
         self._rotation_resolution = rotation_resolution
+        self._real = real
 
         self._cross_entropy_loss = nn.CrossEntropyLoss(reduction='none')
         self._name = NAME + '_layer' + str(self._layer)
 
+
     def build(self, training: bool, device: torch.device = None):
+        if self._real:
+            print("Building peract agent for the real data. Make sure the"
+                  " scene bounds are correct.")
+
         self._training = training
         self._device = device
 
@@ -363,15 +386,62 @@ class QAttentionPerActBCAgent(Agent):
         q_collision_softmax = F.softmax(q_collision, dim=1)
         return q_collision_softmax
 
+    def get_actions(self, replay_sample):
+        action_gripper_pose = replay_sample['gripper_pose']
+        bs = action_gripper_pose.shape[0]
+        action_trans = []
+        action_rot_grip = []
+
+        for i in range(bs):
+            _gripper_pose = action_gripper_pose[i].cpu().numpy()
+            _action_trans = utils.point_to_voxel_index(
+                _gripper_pose[:3],
+                self._voxel_size,
+                self._coordinate_bounds.cpu()[0],
+            )
+            action_trans.append(_action_trans)
+
+            _quat = _gripper_pose[3:]
+            _action_rot_grip = utils.quaternion_to_discrete_euler(
+                _quat, self._rotation_resolution).tolist()
+            _action_rot_grip.append(replay_sample["rot_grip_action_indicies"][i][-1].item())
+            action_rot_grip.append(_action_rot_grip)
+
+        action_trans = torch.tensor(action_trans).to(replay_sample['gripper_pose'].device)
+        action_rot_grip = torch.tensor(action_rot_grip).to(replay_sample['gripper_pose'].device).int()
+        return action_trans, action_rot_grip
+
     def update(self, step: int, replay_sample: dict) -> dict:
-        action_trans = replay_sample['trans_action_indicies'][:, self._layer * 3:self._layer * 3 + 3].int()
-        action_rot_grip = replay_sample['rot_grip_action_indicies'].int()
+
+        if self._real:
+            action_trans, action_rot_grip = self.get_actions(replay_sample)
+
+
+            prev_layer_voxel_grid = None
+            prev_layer_bounds = None
+        else:
+            action_trans = replay_sample['trans_action_indicies'][:, self._layer * 3:self._layer * 3 + 3].int()
+            action_rot_grip = replay_sample['rot_grip_action_indicies'].int()
+
+
+
+
         action_gripper_pose = replay_sample['gripper_pose']
         action_ignore_collisions = replay_sample['ignore_collisions'].int()
         lang_goal_emb = replay_sample['lang_goal_emb'].float()
         lang_token_embs = replay_sample['lang_token_embs'].float()
+
         prev_layer_voxel_grid = replay_sample.get('prev_layer_voxel_grid', None)
         prev_layer_bounds = replay_sample.get('prev_layer_bounds', None)
+
+        # if not self._real:
+        #     print("Checking correctness")
+        #     _action_trans, _action_rot_grip = self.get_actions(replay_sample)
+        #     assert (action_trans == _action_trans).all()
+        #     assert (action_rot_grip == _action_rot_grip).all()
+        #     assert prev_layer_voxel_grid is None
+        #     assert prev_layer_bounds is None
+
         device = self._device
 
         bounds = self._coordinate_bounds.to(device)
@@ -405,6 +475,11 @@ class QAttentionPerActBCAgent(Agent):
                                          self._rotation_resolution,
                                          self._device)
 
+        # import pickle as pkl
+        # with open("real_actions.pkl", "wb") as f:
+        #     pkl.dump((action_trans.cpu().numpy(),
+        #               action_rot_grip.cpu().numpy()), f)
+
         # forward pass
         q_trans, q_rot_grip, \
         q_collision, \
@@ -416,6 +491,7 @@ class QAttentionPerActBCAgent(Agent):
                              bounds,
                              prev_layer_bounds,
                              prev_layer_voxel_grid)
+
 
         # argmax to choose best action
         coords, \
