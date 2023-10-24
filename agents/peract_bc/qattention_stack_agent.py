@@ -77,14 +77,14 @@ class QAttentionStackAgent(Agent):
             observation['prev_layer_voxel_grid'] = act_results.observation_elements['prev_layer_voxel_grid']
             observation['prev_layer_bounds'] = act_results.observation_elements['prev_layer_bounds']
 
-            for n in self._camera_names:
-                px, py = utils.point_to_pixel_index(
-                    attention_coordinate[0],
-                    observation['%s_camera_extrinsics' % n][0, 0].cpu().numpy(),
-                    observation['%s_camera_intrinsics' % n][0, 0].cpu().numpy())
-                pc_t = torch.tensor([[[py, px]]], dtype=torch.float32, device=self._device)
-                observation['%s_pixel_coord' % n] = pc_t
-                observation_elements['%s_pixel_coord' % n] = [py, px]
+            # for n in self._camera_names:
+            #     px, py = utils.point_to_pixel_index(
+            #         attention_coordinate[0],
+            #         observation['%s_camera_extrinsics' % n][0, 0].cpu().numpy(),
+            #         observation['%s_camera_intrinsics' % n][0, 0].cpu().numpy())
+            #     pc_t = torch.tensor([[[py, px]]], dtype=torch.float32, device=self._device)
+            #     observation['%s_pixel_coord' % n] = pc_t
+            #     observation_elements['%s_pixel_coord' % n] = [py, px]
 
             infos.update(act_results.info)
 

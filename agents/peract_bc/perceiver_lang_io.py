@@ -361,6 +361,10 @@ class PerceiverVoxelLangEncoder(nn.Module):
         # preprocess input
         d0 = self.input_preprocess(ins)                       # [B,10,100,100,100] -> [B,64,100,100,100]
 
+        # import pickle as pkl
+        # pkl.dump(ins.cpu().numpy(), open('ins.pkl', 'wb'))
+        # assert False
+
         # aggregated features from 1st softmax and maxpool for MLP decoders
         feats = [self.ss0(d0.contiguous()), self.global_maxp(d0).view(ins.shape[0], -1)]
 
